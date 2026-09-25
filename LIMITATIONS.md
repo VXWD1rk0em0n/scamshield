@@ -1,0 +1,45 @@
+# Limitations and production-readiness notes
+
+ScamShield is a hackathon prototype. It is built to production habits (typed stages, fail-safe fallbacks, masking, append-only audit), but these gaps would need closing before real users rely on it.
+
+## Detection quality
+
+- **The metrics are on synthetic data, so they don't represent real-world traffic.** All 79 messages were written for this project, and by the same author as the rules, so the dev-split numbers are optimistic by construction. The holdout split (24 messages written after the rules, never tuned on) is the more honest figure, and it already shows the gap: interrupt-level recall is 0.85 on dev but 0.50 on holdout. Real evaluation needs a labelled sample of real reported scams (e.g. carrier 7726 reports, phishing feeds) and a real legitimate-message base rate. With a scam prevalence of about 1%, a 0% false-positive rate on 34 legit messages says little. The 95% upper bound is still about 9%.
+- **Hybrid mode is unmeasured in this build.** No API credentials were available, so the rules-only vs hybrid comparison is empty. The LLM path is covered by tests (parsing, schema rejection, timeouts, injection handling) but not by accuracy numbers.
+- **Confidence is not calibrated.** It is a transparent heuristic (mode cap x engine agreement x distance to a tier boundary), not a probability. Calibrating it needs real outcomes, for example from analyst decisions.
+- **Lookalike detection only covers the allowlist.** `brands.py` lists about 37 brands. A spoof of a brand that isn't on the list (e.g. a regional toll operator, as in holdout case h-s01) is invisible to R06/R07. Typosquat tolerance is deliberately tight for short brand names (5 letters or fewer) to avoid "chase"/"phase" false positives.
+- **No URL reputation, detonation or expansion.** Shortened links are flagged but never expanded, and domains are never resolved. Domain age, TLD risk, certificate data and threat-intel feeds are future work. Because the tool never fetches anything, it also cannot see what a link actually leads to.
+- **English-only.** Non-Latin scripts and Latin-script messages dominated by Spanish/French/German/Portuguese/Italian stop words return `INSUFFICIENT_DATA`. Attackers can shift language to evade detection. The user still sees an explicit "not a safe verdict" notice, but gets no protection. The keyword lexicons are English and US/UK-centric.
+- **Keyword rules are brittle against paraphrase.** Fluent LLM-written scams that avoid the lexicon (e.g. "log in with your usual credentials" phrased differently) depend on the LLM layer. Clause-level pairing can also miss verb and object split across clauses (holdout case h-s11).
+- **Out of scope:** attachments, images/QR codes, voice and video deepfakes, conversation-level context (multi-message romance or pig-butchering arcs), and sender authentication (SPF/DKIM/DMARC, STIR/SHAKEN).
+
+## LLM cost, latency and data exposure
+
+- **Latency.** A synchronous Claude call typically adds about 1–3 s per message (not measured here without a key), against about 1 ms for rules-only (p50 1.04 ms, p95 2.33 ms measured). The call runs at `effort: low` with a 12 s timeout and one retry, after which the result falls back to rules-only.
+- **Cost.** At the default `claude-opus-5` rates ($5 / $25 per million input/output tokens), a request of roughly 900 input and 300–500 output tokens (including thinking at low effort) costs about **$0.01–0.02 per message**. That is fine for a user-initiated "check this message" button and too much for scanning every inbound SMS.
+- **Mitigations already built in:** `llm.policy = "ambiguous"` pre-filters with the rules and sends only messages scoring 10–75 to the LLM, so clear scams and clean messages never incur a call. The model can be swapped via `SCAMSHIELD_LLM_MODEL` (e.g. `claude-haiku-4-5` is about 5x cheaper), which should be validated with `eval/run_eval.py` before switching. Further options: prompt-cache the static system prompt, and use the Batch API for non-interactive back-scans.
+- **Third-party data exposure is reduced by masking, not eliminated.** Masked text still leaves the device: names, addresses, account nicknames, free-text personal details, e-mail *domains* (kept on purpose as a phishing signal, but a personal domain can identify someone) and URL paths are not masked. A production deployment needs a data-processing agreement, zero-data-retention terms where available, and possibly on-device or self-hosted inference for sensitive tenants.
+- **Prompt injection is mitigated, not solved.** Nonce-delimited input, an explicit "untrusted data" instruction, strict output schema, the R15 rule, and the scoring discount (an LLM that rates an injection-bearing message *lower* than the rules without flagging the injection is ignored) raise the bar. A novel injection that evades both R15 and the model could still lower a hybrid score, though never below the rules-only combo floor.
+
+## Scale and operations
+
+- **First bottleneck: SQLite writes and synchronous LLM calls.** SQLite (WAL mode) serialises writers, and each analysis blocks on the LLM. To scale: put analyses on a queue (e.g. SQS/Kafka plus workers), make LLM calls async with concurrency limits and backoff, and move the audit store to **Postgres**. Keep append-only enforcement there via revoked `UPDATE`/`DELETE` grants plus a purge role, or use a WORM/object-lock sink.
+- **Streamlit is a single-process demo UI.** There is no authentication, and the analyst queue is visible to anyone who can reach the app. The app binds to `localhost` for that reason. Production needs SSO, role-based access (user vs analyst), CSRF-safe APIs, and rate limiting.
+- **Key management.** `SCAMSHIELD_PEPPER` falls back to a random secret in `data/.pepper`. Production should use a KMS-managed key with rotation (rotating it breaks trusted-list lookups unless entries are re-keyed).
+- **Retention** is a manual or button-triggered purge (default 30 days). Production needs a scheduled job, legal-hold support, and deletion of derived data (exports, backups).
+- **Model and config drift.** Every case records `model_version` and `config_hash`, but there is no automated regression gate. CI should run `eval/run_eval.py` and fail on precision/recall regressions before a config or model change ships.
+- **Analyst feedback does not retrain anything yet.** Overturns and confirmations are logged and counted but not fed back into weights or the allowlist.
+
+## Known trade-offs in the current rules
+
+- **Trusted senders are a lever an attacker can inherit.** If a trusted contact's account is taken over and sends a plain "send me the code" with no lookalike link or sender mismatch, the -20 trust credit can pull it to LOW. Lookalike and mismatch evidence still count, but a production system should decay trust over time and never credit it against a credential request.
+- **The combo floor is deterministic.** A request plus an unverified authority claim ("IRS ... pay with gift cards") is never below HIGH, even if the LLM disagrees. This is intentional, since a false CRITICAL costs less than a missed one, but it means analysts see some legitimate-but-unusual business requests at HIGH.
+- **Reassuring boilerplate is credited only when nothing suspicious fired.** This blocks the "add 'we will never ask for your code' to the lure" trick, but legitimate messages that *also* contain a link to an unlisted domain lose that credit.
+
+## Screenshot / photo input
+
+- **OCR quality bounds detection.** The image-mode eval renders clean, synthetic phone screenshots. Real photos of screens (glare, moiré, skew, low light, dark mode, small fonts) will read worse, and there is no photo-quality benchmark yet. Misread characters in a URL can turn a lookalike domain into an unknown one, or the reverse.
+- **Visual obfuscation is invisible to OCR by design.** Zero-width characters don't render, stylised letters render as normal letters, and Cyrillic homoglyphs look identical to Latin. OCR therefore reads them as plain text: R14 OBFUSCATION evidence is lost, and a homoglyph IDN domain (`pаypal.com`) is read as the real `paypal.com`. Text input (paste or share) preserves this evidence and should be preferred when available.
+- **No sender metadata from a picture.** Local OCR can't tell which line is the sender. The header number/name ends up in the text body, and sender-mismatch checks need the user to type the sender. Claude vision returns a sender hint.
+- **Not handled:** QR codes (decoding them is a natural next step for "scan-to-pay" scams), text inside embedded images or logos, handwriting, HEIC files (iPhones usually convert to JPEG on upload, but not always), multi-message conversation screenshots (the whole thread is analysed as one message), and prompt injection hidden in images aimed at the vision model (mitigated by the transcribe-only prompt and by the same rules running on the transcription).
+- **Cost and latency.** Local OCR adds about 1–3 s of CPU per image and about 100 MB of dependencies (onnxruntime, OpenCV). Claude vision adds an API call carrying image tokens.

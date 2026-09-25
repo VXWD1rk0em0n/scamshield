@@ -1,0 +1,10 @@
+[server]
+address = "localhost"   # never expose the demo on the LAN by default
+headless = true
+maxUploadSize = 8        # MB; the app also enforces [image].max_bytes
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

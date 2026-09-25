@@ -1,0 +1,74 @@
+# ScamShield runtime configuration. Every threshold and weight lives here;
+# the SHA-256 of this file is stamped on every audit record (config_hash).
+
+[meta]
+version = "2026.09.24"
+
+[limits]
+min_chars = 15          # shorter (after stripping) -> INSUFFICIENT_DATA
+truncate_at = 5000      # longer inputs are cut to this length and flagged "truncated"
+reject_over = 8000      # longer inputs are refused outright (abuse / DoS guard)
+max_control_ratio = 0.05  # share of control chars above which input is treated as binary
+
+[tiers]
+# final score >= threshold -> tier. CRITICAL additionally requires the
+# "request + impersonation" combination (see [scoring].combo_floor).
+medium = 30
+high = 55
+critical = 80
+
+[scoring]
+rules_weight = 0.6
+llm_weight = 0.4
+disagreement_threshold = 45     # |rule_score - llm_score| >= this -> needs_review, no auto-CRITICAL
+combo_floor = "HIGH"            # credential/payment request + impersonation is never below this tier
+hybrid_confidence_cap = 0.95
+rules_only_confidence_cap = 0.75
+fallback_confidence_cap = 0.55  # LLM attempted but failed -> degraded confidence
+
+[llm]
+enabled = true
+policy = "always"       # "always" | "ambiguous" (only send rule scores inside the band)
+ambiguous_min = 10
+ambiguous_max = 75
+timeout_seconds = 12.0
+max_retries = 1
+max_tokens = 2048
+effort = "low"          # classification route: low effort keeps latency/cost down
+
+[retention]
+days = 30
+
+[rules.weights]
+URGENCY = 15
+THREAT = 15
+CREDENTIAL_REQUEST = 30
+PAYMENT_METHOD = 25
+P2P_TRANSFER_REQUEST = 10
+LOOKALIKE_DOMAIN = 35
+SENDER_MISMATCH = 25
+SHORTENED_URL = 15
+IP_LITERAL_URL = 25
+NEW_NUMBER_FAMILY = 25
+TOO_GOOD_TO_BE_TRUE = 20
+OFF_PLATFORM = 15
+SECRECY = 20
+OBFUSCATION = 25
+PROMPT_INJECTION = 30
+REMOTE_ACCESS = 25
+PAYMENT_REDIRECTION = 30
+UPFRONT_FEE = 20
+CALLBACK_LURE = 15
+AUTHORITY_CLAIM = 5
+# Negative (benign) signals. Only credited when no request/impersonation rule fired,
+# so an attacker cannot buy a lower score by pasting reassuring boilerplate.
+PROTECTIVE_LANGUAGE = -15
+OFFICIAL_LINKS_ONLY = -10
+KNOWN_CONTACT = -10
+TRUSTED_SENDER = -20
+
+[image]
+max_bytes = 8000000        # uploads above this are refused
+max_pixels = 40000000      # checked from the header before decoding (decompression-bomb guard)
+max_side = 2000            # images are downscaled before OCR
+min_ocr_confidence = 0.6   # below this the result is flagged "low_ocr_confidence"
