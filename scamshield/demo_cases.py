@@ -1,6 +1,8 @@
 """One-click demo cases for the Streamlit UI. ``expect_tier`` is asserted in tests/test_demo_cases.py."""
 
-DEMO_CASES = [
+from typing import Any
+
+DEMO_CASES: list[dict[str, Any]] = [
     {"group": "Normal", "title": "Appointment reminder", "expect_tier": "LOW", "channel": "sms", "sender": "+1 510 555 0100",
      "claimed": "Riverside Family Clinic",
      "text": "Reminder: You have an appointment with Dr. Patel at Riverside Family Clinic on Tue, Oct 7 at 10:30 AM. Reply C to confirm or call 555-0100 to reschedule.",

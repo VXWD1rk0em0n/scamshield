@@ -2,7 +2,9 @@
 
 A prototype for AI Defense Lab 2026, Track 2 (Fraud / Scam / Identity). You paste an SMS, email or chat message; ScamShield scores it, highlights the exact suspicious phrases, and applies a policy-gated intervention (anything from no banner at all up to blocked links with a verify-first checklist). Every decision can be appealed and is logged in an append-only, PII-masked audit trail.
 
-The decision engine is **hybrid**: a deterministic rules layer (20 rules plus 4 benign signals, each with an ID, a weight and a readable reason) combined with an LLM classifier (Claude, strict JSON validated by pydantic). If the LLM is unavailable, fails, times out or returns bad output, ScamShield falls back to **rules-only** and marks the result as degraded confidence. With no API key it runs fully offline.
+> **Live demo:** https://scamshield-liard-nu.vercel.app - the web checker (paste text or upload a screenshot; rules-only, nothing stored). The full Streamlit app - including the **Analyst queue, Metrics and Audit log** tabs (brief tabs 3-5) - runs locally: see [How to run](#9-how-to-run) and [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
+
+The decision engine is **hybrid**: a deterministic rules layer (21 rules plus 4 benign signals, each with an ID, a weight and a readable reason) combined with an LLM classifier (Claude, strict JSON validated by pydantic). If the LLM is unavailable, fails, times out or returns bad output, ScamShield falls back to **rules-only** and marks the result as degraded confidence. With no API key it runs fully offline.
 
 ---
 
@@ -20,7 +22,7 @@ The decision engine is **hybrid**: a deterministic rules layer (20 rules plus 4 
 ## 2. Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     U[User pastes message<br/>+ channel, sender, claimed sender,<br/>known-contact flag] --> I
 
     subgraph Pipeline
@@ -68,7 +70,7 @@ app.py             Streamlit UI (5 tabs)
 config/scamshield.toml   all thresholds and weights
 eval/              dataset.jsonl (79 labelled messages), run_eval.py, screenshots.py (phone-screenshot renderer), report.md, results.json
 assets/demo/       sample screenshots used by the Demo tab
-tests/             pytest suite (182 tests)
+tests/             pytest suite (227 tests)
 ```
 
 ## 3. Signals and trust levels
@@ -115,6 +117,7 @@ Weights live in `config/scamshield.toml`. Rules read the normalised text, so zer
 | R18 | UPFRONT_FEE | 20 | redelivery/customs/processing fee, buy equipment from our vendor, fake-check deposit-and-wire |
 | R19 | CALLBACK_LURE | 15 | call a number in the message, gated on authority claim + pressure/"if this wasn't you" |
 | R20 | AUTHORITY_CLAIM | 5 | brand in a *claiming* position ("Chase Alert:", "from PayPal", "your Amazon account", not "buy Apple gift cards"), government, executive |
+| R21 | POSSIBLE_LOOKALIKE_OCR | 15 | screenshots only: a link one letter off an official domain (`amazan.com`) - a typosquat *or* an OCR misread, so it is flagged with lower weight and a "check the original" note instead of the full lookalike rule |
 | N01 | PROTECTIVE_LANGUAGE | -15 | "we will never ask for your PIN", "don't share this code" |
 | N02 | OFFICIAL_LINKS_ONLY | -10 | every link is on an official brand domain |
 | N03 | KNOWN_CONTACT | -10 | user flag |
@@ -188,6 +191,25 @@ image bytes -> image_ingest.load_image -> OCR engine -> text -> the normal pipel
 - **Fix-and-recheck**: the extracted text is placed in the Message box. If OCR misread a word, correct it and press Analyze. Low OCR confidence (< 0.6) triggers a visible warning.
 - **Claude vision (opt-in)**: if an API key is configured, a checkbox lets you transcribe with Claude instead. It is better on skewed or low-light photos, but **it sends the full, unmasked image to Anthropic**, which is why it is off by default, needs explicit consent (`ClaudeVisionOCR(consent=True)`), is instructed to transcribe only and ignore instructions in the image, and falls back to local OCR on any failure.
 
+### Screenshot accuracy (measured)
+
+Real screenshots are not clean text. `eval/phone_screens.py` renders 112 realistic ones (14 messages x iMessage light/dark, Google Messages dark, WhatsApp light/dark, Gmail dark, a compressed forward, and a phone photo of a screen with tilt, blur and glare). `eval/web_ocr/` runs the **website's exact OCR path** (Tesseract.js + `public/ocr-core.js`) and scores each result through the real API against pasting the same text:
+
+| Website screenshot check | Same warn decision as pasted text | Same exact tier | Photos of a screen (exact tier) | Word recall |
+|---|---|---|---|---|
+| Before (raw OCR text) | 102 / 112 | 88 / 112 | 7 / 14 | 0.969 |
+| **After** | **112 / 112** | **106 / 112** | **13 / 14** | **0.983** |
+
+What was wrong and what fixed it:
+
+- **Phone interface text** (status bar "9:41", "Text Message · Today 9:41 AM", Gmail's "to me", preview lines) was glued onto the message. It hid the sender and the "PayPal Invoice:" brand claim, so a CRITICAL scam could read as LOW. `extract_message()` now drops interface rows by vocabulary (robust to OCR dropping spaces), lifts the sender from the header (phone, email, short code, or a name like "Chase" as the claimed sender), and removes duplicated previews.
+- **Underlined links vanished** on blurred, compressed or dark screenshots: Tesseract classified the underlined line as a graphic and skipped it, losing the lookalike domain. `ocr-core.js` inverts dark-mode regions locally (also white-on-blue bubbles) and erases long thin horizontal lines (underlines, bubble edges) before recognition.
+- **One-letter misreads of official domains** (`amazon.com` -> `amazan.com`) looked like typosquats and turned a genuine Amazon email into HIGH. That is now R21 (lower weight, "check the link in the original"), and common URL mangling (`https.//`, `www.,`) is repaired. Leetspeak, brand+affix and subdomain tricks still count as full lookalikes.
+
+The remaining exact-tier differences are mostly the screenshot showing the sender, which *adds* evidence (MEDIUM -> HIGH). Reproduce with `python -m eval.phone_screens`, then `cd eval/web_ocr && npm install && node bench.mjs baseline clean && cd ../.. && python eval/web_ocr/score.py baseline clean`.
+
+The desktop app's local engine (RapidOCR) drops the spaces between words on small or blurry text ("onyouraccount"). It now upscales small images and re-segments space-less runs (`respace_ocr`, dictionary-checked and brand-safe); `python eval/web_ocr/score_local.py` measures it.
+
 ## 9. How to run
 
 Requires Python 3.11+ (developed on 3.12). PowerShell:
@@ -239,7 +261,7 @@ Then open http://localhost:3000. To deploy, run `npx vercel login` once, then `n
 python -m pytest
 ```
 
-182 tests. The required named cases are in [tests/test_required_cases.py](tests/test_required_cases.py):
+227 tests; `mypy scamshield api` reports no issues. The required named cases are in [tests/test_required_cases.py](tests/test_required_cases.py):
 
 | Case | Test |
 |---|---|

@@ -461,7 +461,7 @@ def _brand_lookalikes(s: Signals) -> list[tuple[str, str, Span | None]]:
         match = find_lookalike(u.host)
         if match:
             found.append((u.host, f"'{u.host}' imitates {match.brand.display} ({match.technique})", (u.start, u.end)))
-    domains = [(e.value.rsplit("@", 1)[-1].lower(), (e.start, e.end)) for e in s.emails]
+    domains: list[tuple[str, Span | None]] = [(e.value.rsplit("@", 1)[-1].lower(), (e.start, e.end)) for e in s.emails]
     sender_dom = _sender_email_domain(s)
     if sender_dom:
         domains.append((sender_dom, None))
@@ -590,7 +590,8 @@ def _d_obfuscation(s: Signals, _: dict) -> Detection | None:
         reasons.append("right-to-left override characters that can disguise text")
     if ob.mixed_script_words:
         reasons.append("words mixing Latin with Cyrillic/Greek look-alike letters: " + ", ".join(ob.mixed_script_words[:3]))
-        folded = {w.translate(str.maketrans(HOMOGLYPHS)) for w in ob.mixed_script_words}
+        table = {ord(k): v for k, v in HOMOGLYPHS.items()}
+        folded = {w.translate(table) for w in ob.mixed_script_words}
         for w in folded:
             spans.extend(m.span() for m in re.finditer(re.escape(w), text))
     if ob.compat_chars >= 3:

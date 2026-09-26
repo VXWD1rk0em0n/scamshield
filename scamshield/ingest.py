@@ -233,7 +233,7 @@ def extract_urls(analysis: str, clean: str | None = None) -> tuple[ExtractedURL,
                 is_shortener=(reg in SHORTENERS or decoded in SHORTENERS) and brand is None,
                 is_ip_literal=ip_literal,
                 is_punycode=punycode,
-                has_homoglyphs=bool(clean) and any(c in HOMOGLYPHS for c in clean[m.start() : m.start() + len(raw)]),
+                has_homoglyphs=clean is not None and any(c in HOMOGLYPHS for c in clean[m.start() : m.start() + len(raw)]),
             )
         )
     return tuple(urls)

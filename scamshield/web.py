@@ -104,12 +104,12 @@ def segments(result: AnalysisResult) -> list[dict]:
     out: list[dict] = []
     for a, b in zip(bounds, bounds[1:]):
         span = next((s for s in spans if s.start <= a and b <= s.end), None)
-        piece = {"text": text[a:b], "category": span.category if span else None, "labels": list(span.labels) if span else []}
+        piece: dict[str, object] = {"text": text[a:b], "category": span.category if span else None, "labels": list(span.labels) if span else []}
         if a in zw and b == a + 1:
             piece["hidden_char"] = True
         prev = out[-1] if out else None
         if prev and not prev.get("hidden_char") and not piece.get("hidden_char") and prev["category"] == piece["category"] and prev["labels"] == piece["labels"]:
-            prev["text"] += piece["text"]
+            prev["text"] = str(prev["text"]) + str(piece["text"])
         else:
             out.append(piece)
     return out
@@ -270,6 +270,7 @@ def handle_post(body: bytes, client_key: str = "anon") -> tuple[int, dict]:
     try:
         payload = json.loads(body.decode("utf-8"))
         msg, source = parse_request(payload)
+        assert isinstance(payload, dict)  # parse_request rejects anything else
     except (UnicodeDecodeError, json.JSONDecodeError):
         return 400, {"error": "body must be UTF-8 JSON"}
     except BadRequest as exc:

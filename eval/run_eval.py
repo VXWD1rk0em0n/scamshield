@@ -253,7 +253,8 @@ def write_report(results: list[dict], path: Path, notes: dict[str, str]) -> None
             + (f" LLM status counts: {res['llm_status_counts']}." if res["llm_status_counts"] else "")
             + (
                 f" Image mode: each message rendered as a phone screenshot, read by local OCR, no sender metadata; "
-                f"mean OCR word recall {res['ocr_word_recall_mean']:.3f}."
+                f"mean OCR word recall {res['ocr_word_recall_mean']:.3f}. OCR latency inside eval runs depends on machine "
+                "load (other processes compete for the CPU); standalone warm OCR measures about 1.7-3 s per image."
                 if res.get("ocr_word_recall_mean") is not None
                 else ""
             ),
@@ -300,11 +301,24 @@ def write_report(results: list[dict], path: Path, notes: dict[str, str]) -> None
         under = [r for r in res["records"] if r["label"] == "scam" and r["tier"] == "MEDIUM"]
         if under:
             lines += [
-                "Scams that were warned (MEDIUM) but not interrupted: "
-                + ", ".join(f"{r['id']} ({r['category']}, {r['score']})" for r in under)
-                + ".",
+                f"#### Scams warned (MEDIUM) but not interrupted ({len(under)})",
+                "",
+                "Not errors at the warn point, but the user only sees a soft warning. For each: what fired and why it stopped short of HIGH.",
                 "",
             ]
+            for r in under:
+                fired = [x.split(":")[1].split("(")[0] for x in r["rules"]]
+                has_request = any(f in fired for f in ("CREDENTIAL_REQUEST", "PAYMENT_METHOD", "P2P_TRANSFER_REQUEST", "PAYMENT_REDIRECTION", "UPFRONT_FEE"))
+                has_imp = any(f in fired for f in ("LOOKALIKE_DOMAIN", "SENDER_MISMATCH", "NEW_NUMBER_FAMILY"))
+                why = (
+                    "request without impersonation evidence, so the HIGH floor did not apply"
+                    if has_request and not has_imp
+                    else "impersonation/pressure signals without a credential or payment request"
+                    if not has_request
+                    else "combined weight stayed below the HIGH threshold"
+                )
+                lines.append(f"- **{r['id']}** ({r['category']}, score {r['score']}): {', '.join(fired) or 'no rules'} - {why}.")
+            lines.append("")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

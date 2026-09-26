@@ -1,6 +1,6 @@
 # ScamShield evaluation report
 
-Generated 2026-09-25T06:57:48+00:00 - config `298d46e23d33de00` - thresholds MEDIUM >= 30, HIGH >= 55, CRITICAL >= 80.
+Generated 2026-09-26T06:54:46+00:00 - config `6a6e57987e22e82e` - thresholds MEDIUM >= 30, HIGH >= 55, CRITICAL >= 80.
 
 Positive class = scam. **warn** = flagged at tier >= MEDIUM (any warning). **interrupt** = flagged at tier >= HIGH (links disabled). The dataset is synthetic; see LIMITATIONS.md.
 
@@ -24,7 +24,7 @@ Positive class = scam. **warn** = flagged at tier >= MEDIUM (any warning). **int
 
 ## rules
 
-Latency per message: p50 **1.04 ms**, p95 **2.23 ms** (mean 1.17 ms). Cases marked needs_review: 0.
+Latency per message: p50 **2.64 ms**, p95 **5.8 ms** (mean 2.83 ms). Cases marked needs_review: 0.
 
 ### Confusion matrix (label x tier)
 
@@ -135,12 +135,23 @@ Binary confusion at the warn point:
 - Automated: Only R01:URGENCY fired (score 15, 15 below MEDIUM). No credential/payment request or impersonation signal was matched, so the lure is invisible to the rules.
 - Analysis: HOLDOUT - not tuned. Two gaps: (1) the clause splitter breaks on ' - ', so 'Pay now by calling ...' and 'we accept Bitcoin or prepaid cards' land in different clauses and PAYMENT_METHOD (verb + term in one clause) never fires - a design bug found by the holdout; (2) 'will be disconnected' is not in the THREAT lexicon and 'City Power & Light' is not recognised as an authority, so CALLBACK_LURE is gated off. Fix candidates: pair payment verbs and terms across adjacent clauses, add service-disconnection threats, and treat unknown utility names in 'FINAL NOTICE from X' as authority claims.
 
-Scams that were warned (MEDIUM) but not interrupted: d-s06 (fake_recruiter, 35), d-s12 (prize_lottery, 50), d-s13 (callback_phishing, 50), d-s28 (llm_written_bec, 30), h-s04 (task_job_scam, 35), h-s06 (password_expiry_phishing, 45), h-s07 (investment_group, 40), h-s09 (otp_harvesting, 30).
+#### Scams warned (MEDIUM) but not interrupted (8)
+
+Not errors at the warn point, but the user only sees a soft warning. For each: what fired and why it stopped short of HIGH.
+
+- **d-s06** (fake_recruiter, score 35): TOO_GOOD_TO_BE_TRUE, OFF_PLATFORM - impersonation/pressure signals without a credential or payment request.
+- **d-s12** (prize_lottery, score 50): TOO_GOOD_TO_BE_TRUE, URGENCY, SHORTENED_URL - impersonation/pressure signals without a credential or payment request.
+- **d-s13** (callback_phishing, score 50): URGENCY, THREAT, CALLBACK_LURE, AUTHORITY_CLAIM - impersonation/pressure signals without a credential or payment request.
+- **d-s28** (llm_written_bec, score 30): CREDENTIAL_REQUEST - request without impersonation evidence, so the HIGH floor did not apply.
+- **h-s04** (task_job_scam, score 35): TOO_GOOD_TO_BE_TRUE, OFF_PLATFORM - impersonation/pressure signals without a credential or payment request.
+- **h-s06** (password_expiry_phishing, score 45): SENDER_MISMATCH, URGENCY, AUTHORITY_CLAIM - impersonation/pressure signals without a credential or payment request.
+- **h-s07** (investment_group, score 40): PAYMENT_METHOD, OFF_PLATFORM - request without impersonation evidence, so the HIGH floor did not apply.
+- **h-s09** (otp_harvesting, score 30): CREDENTIAL_REQUEST - request without impersonation evidence, so the HIGH floor did not apply.
 
 
 ## image
 
-Latency per message: p50 **10959.85 ms**, p95 **13683.97 ms** (mean 8678.66 ms). Cases marked needs_review: 0. Image mode: each message rendered as a phone screenshot, read by local OCR, no sender metadata; mean OCR word recall 0.984.
+Latency per message: p50 **10959.85 ms**, p95 **13683.97 ms** (mean 8678.66 ms). Cases marked needs_review: 0. Image mode: each message rendered as a phone screenshot, read by local OCR, no sender metadata; mean OCR word recall 0.984. OCR latency inside eval runs depends on machine load (other processes compete for the CPU); standalone warm OCR measures about 1.7-3 s per image.
 
 ### Confusion matrix (label x tier)
 
@@ -258,5 +269,16 @@ Binary confusion at the warn point:
 - Automated: Only R01:URGENCY fired (score 15, 15 below MEDIUM). No credential/payment request or impersonation signal was matched, so the lure is invisible to the rules.
 - Analysis: HOLDOUT - not tuned. Two gaps: (1) the clause splitter breaks on ' - ', so 'Pay now by calling ...' and 'we accept Bitcoin or prepaid cards' land in different clauses and PAYMENT_METHOD (verb + term in one clause) never fires - a design bug found by the holdout; (2) 'will be disconnected' is not in the THREAT lexicon and 'City Power & Light' is not recognised as an authority, so CALLBACK_LURE is gated off. Fix candidates: pair payment verbs and terms across adjacent clauses, add service-disconnection threats, and treat unknown utility names in 'FINAL NOTICE from X' as authority claims.
 
-Scams that were warned (MEDIUM) but not interrupted: d-s06 (fake_recruiter, 35), d-s10 (payment_redirection, 50), d-s12 (prize_lottery, 50), d-s13 (callback_phishing, 50), d-s28 (llm_written_bec, 30), h-s04 (task_job_scam, 35), h-s07 (investment_group, 40), h-s09 (otp_harvesting, 30).
+#### Scams warned (MEDIUM) but not interrupted (8)
+
+Not errors at the warn point, but the user only sees a soft warning. For each: what fired and why it stopped short of HIGH.
+
+- **d-s06** (fake_recruiter, score 35): TOO_GOOD_TO_BE_TRUE, OFF_PLATFORM - impersonation/pressure signals without a credential or payment request.
+- **d-s10** (payment_redirection, score 50): PAYMENT_REDIRECTION, SECRECY - request without impersonation evidence, so the HIGH floor did not apply.
+- **d-s12** (prize_lottery, score 50): TOO_GOOD_TO_BE_TRUE, URGENCY, SHORTENED_URL - impersonation/pressure signals without a credential or payment request.
+- **d-s13** (callback_phishing, score 50): URGENCY, THREAT, CALLBACK_LURE, AUTHORITY_CLAIM - impersonation/pressure signals without a credential or payment request.
+- **d-s28** (llm_written_bec, score 30): CREDENTIAL_REQUEST - request without impersonation evidence, so the HIGH floor did not apply.
+- **h-s04** (task_job_scam, score 35): TOO_GOOD_TO_BE_TRUE, OFF_PLATFORM - impersonation/pressure signals without a credential or payment request.
+- **h-s07** (investment_group, score 40): PAYMENT_METHOD, OFF_PLATFORM - request without impersonation evidence, so the HIGH floor did not apply.
+- **h-s09** (otp_harvesting, score 30): CREDENTIAL_REQUEST - request without impersonation evidence, so the HIGH floor did not apply.
 
