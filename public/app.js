@@ -87,11 +87,23 @@ function setMode(mode) {
   ui.tabText.setAttribute("aria-selected", String(!image));
   ui.tabImage.setAttribute("aria-selected", String(image));
   ui.imagePanel.hidden = !image;
+  $("text-panel").hidden = image;
+  ui.tabText.tabIndex = image ? -1 : 0;
+  ui.tabImage.tabIndex = image ? 0 : -1;
   if (image) loadTesseract().catch(() => {}); // warm up the reader
 }
 ui.tabText.addEventListener("click", () => setMode("text"));
 ui.tabImage.addEventListener("click", () => setMode("image"));
 ui.message.addEventListener("input", () => { lastOcr = null; });
+[ui.tabText, ui.tabImage].forEach((tab) => tab.addEventListener("keydown", (e) => {
+  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+    e.preventDefault();
+    const image = e.key === "End" || (e.key !== "Home" && tab === ui.tabText);
+    setMode(image ? "image" : "text");
+    (image ? ui.tabImage : ui.tabText).focus();
+  }
+}));
+setMode("text");
 ui.message.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) analyze(); });
 ui.analyze.addEventListener("click", () => analyze());
 
@@ -175,6 +187,7 @@ async function readImage(blob) {
     }
     lastOcr = { lines: lines.slice(0, 400) };
     ui.message.value = lines.map((l) => l.text).join("\n");
+    setMode("text");
     await analyze();
   } catch (err) {
     setStatus(err && err.message ? err.message : "Couldn't read that image.", true);
@@ -190,6 +203,9 @@ function onFile(input) {
   input.value = ""; // allow picking the same file again
   if (file) readImage(file);
 }
+document.querySelectorAll('label[role="button"]').forEach((label) => label.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $(label.htmlFor).click(); }
+}));
 ui.fileInput.addEventListener("change", () => onFile(ui.fileInput));
 ui.cameraInput.addEventListener("change", () => onFile(ui.cameraInput));
 ["dragenter", "dragover"].forEach((t) => ui.drop.addEventListener(t, (e) => { e.preventDefault(); ui.drop.classList.add("over"); }));
@@ -225,7 +241,8 @@ async function analyze() {
     }
     setStatus("");
     render(data, body);
-    ui.result.scrollIntoView({ behavior: "smooth", block: "start" });
+    ui.result.focus({ preventScroll: true });
+    if (window.matchMedia("(max-width: 700px)").matches) ui.result.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
   } catch {
     setStatus("Network problem - please try again.", true);
   } finally {
@@ -304,7 +321,7 @@ function linksBlock(data, state, rerender) {
       el("button", { className: "btn", type: "button", text: "I understand the risk - show them",
         onClick: () => { state.revealed = true; rerender(); } })));
   } else {
-    wrap.append(el("div", { className: "lock", text: "⛔ Links blocked. If you're sure this message is genuine, use 'This is legitimate' below." }));
+    wrap.append(el("div", { className: "lock", text: "⛔ Links blocked. If you're sure this message is genuine, use 'This is legitimate' in What to do next." }));
   }
   return wrap;
 }
@@ -313,9 +330,9 @@ function feedbackBlock(data, request, state, rerender) {
   const sender = request.sender_id;
   const box = el("div", { className: "feedback" }, el("h3", { text: "Was this right?" }));
   box.append(el("div", { className: "row" },
-    el("button", { className: "btn", type: "button", text: "✅ This is legitimate", disabled: state.appealed,
+    el("button", { className: "btn", type: "button", text: "This is legitimate", disabled: state.appealed,
       onClick: () => { state.appealed = true; rerender(); } }),
-    el("button", { className: "btn", type: "button", text: "🚩 Report scam", disabled: state.reported,
+    el("button", { className: "btn", type: "button", text: "Reporting options", disabled: state.reported,
       onClick: () => { state.reported = true; rerender(); } })));
   if (state.appealed) {
     box.append(el("p", { className: "note", text: "OK - links are unlocked for this message. This public demo doesn't store appeals (in the full app they go to an analyst queue to fix the rules)." }));
@@ -354,11 +371,11 @@ function feedbackBlock(data, request, state, rerender) {
 }
 
 function render(data, request) {
-  const state = { appealed: false, revealed: false, reported: false, trustAsk: false, trustDone: false };
+  const state = { appealed: false, revealed: false, reported: false, trustAsk: false, trustDone: false, tab: "signs", checked: new Set() };
   const draw = () => {
     const risk = data.risk;
     const iv = data.intervention;
-    const nodes = [];
+    const nodes = [el("div", { className: "section-heading" }, el("h2", { text: "Your results" }), el("span", { className: "step-label", text: "02 / REVIEW" }))];
     if (!risk) {
       nodes.push(el("div", { className: "hero" }, badge(null)),
         el("div", { className: `banner ${iv.action}`, style: { marginTop: "12px" } }, el("strong", { text: iv.headline }), iv.message),
@@ -369,32 +386,62 @@ function render(data, request) {
     }
     const left = el("div", {},
       el("div", { className: "hero" }, el("span", { className: "num", text: String(risk.score) }), el("span", { className: "of", text: "/100 risk" }), badge(risk.tier)),
-      ...meter(risk.score, risk.tier, data.tiers),
-      el("div", { className: "meta", text: `Confidence ${risk.confidence.toFixed(2)}${risk.degraded_confidence ? " (reduced)" : ""} · ${MODE_LABEL[risk.mode] || risk.mode}` }));
+      ...meter(risk.score, risk.tier, data.tiers));
     const right = el("div", {},
       el("div", { className: `banner ${iv.action}` }, el("strong", { text: iv.headline }), iv.message),
-      iv.review_note ? el("p", { className: "note", text: iv.review_note }) : null,
-      iv.tips.length ? el("h3", { text: "What to check" }) : null,
-      iv.tips.length ? el("ul", { className: "plain" }, iv.tips.map((t) => el("li", { text: t }))) : null);
+      iv.review_note ? el("p", { className: "note", text: iv.review_note }) : null);
     nodes.push(el("div", { className: "result-head" }, left, right));
-
+    const panels = {
+      signs: el("div", { className: "result-panel", id: "panel-signs", role: "tabpanel", "aria-labelledby": "result-signs" }),
+      steps: el("div", { className: "result-panel", id: "panel-steps", role: "tabpanel", "aria-labelledby": "result-steps" }),
+    };
+    const tabs = el("div", { className: "result-tabs", role: "tablist", "aria-label": "Result details" });
+    const selectTab = (key) => {
+      state.tab = key;
+      Object.entries(panels).forEach(([k, panel]) => {
+        panel.hidden = k !== key;
+        const tab = tabs.querySelector(`#result-${k}`);
+        tab.setAttribute("aria-selected", String(k === key));
+        tab.tabIndex = k === key ? 0 : -1;
+      });
+    };
+    [["signs", "Warning signs"], ["steps", "What to do next"]].forEach(([key, label]) => {
+      const tab = el("button", { type: "button", role: "tab", id: `result-${key}`, "aria-controls": `panel-${key}`, text: label, onClick: () => selectTab(key) });
+      tab.addEventListener("keydown", (e) => {
+        if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+          e.preventDefault();
+          const next = e.key === "Home" ? "signs" : e.key === "End" ? "steps" : key === "signs" ? "steps" : "signs";
+          selectTab(next); tabs.querySelector(`#result-${next}`).focus();
+        }
+      });
+      tabs.append(tab);
+    });
+    selectTab(state.tab);
+    if (iv.tips.length) panels.signs.append(el("ul", { className: "plain" }, iv.tips.map((t) => el("li", { text: t }))));
     if (iv.checklist.length) {
-      nodes.push(el("h3", { text: "Before you do anything - check these" }),
-        el("ul", { className: "checklist" }, iv.checklist.map((item, i) =>
-          el("li", {}, el("label", {}, el("input", { type: "checkbox", id: `chk-${i}` }), item)))));
-    }
+      panels.steps.append(el("ul", { className: "checklist" }, iv.checklist.map((item, i) => {
+        const check = el("input", { type: "checkbox", id: `chk-${i}`, checked: state.checked.has(i) });
+        check.addEventListener("change", () => check.checked ? state.checked.add(i) : state.checked.delete(i));
+        return el("li", {}, el("label", {}, check, item));
+      })));
+    } else panels.steps.append(el("p", { className: "hint", text: "If you are unsure, contact the sender through a number or app you already trust. A low score does not guarantee a message is safe." }));
+    panels.steps.append(feedbackBlock(data, request, state, draw));
+    nodes.push(tabs, panels.signs, panels.steps);
     if (data.source && data.source.source === "image") {
       const conf = data.source.ocr_confidence;
       nodes.push(el("p", { className: "note", text: `📷 Text read from your image on your device${conf != null ? ` (reading confidence ${Math.round(conf * 100)}%)` : ""}. If a word was misread, fix it in the message box and press Check again.` }));
     }
-    nodes.push(el("h3", { text: "The message" }), legend(data.segments), highlighted(data.segments));
-    nodes.push(linksBlock(data, state, draw));
+    panels.signs.append(el("h3", { text: "Words behind the result" }), ...[legend(data.segments), highlighted(data.segments)].filter(Boolean));
+    const links = linksBlock(data, state, draw);
+    if (links) panels.signs.append(links);
 
-    nodes.push(el("h3", { text: "Why this score" }), el("p", { className: "explain", text: data.evidence.score_explanation }));
-    if (risk.factors.length) nodes.push(factorsTable(risk.factors));
+
 
     const details = el("details", { className: "evidence", open: data.evidence.injection_detected },
-      el("summary", { text: "Evidence detail" }),
+      el("summary", { text: "View scoring & technical details" }),
+      el("p", { className: "meta", text: `Confidence ${risk.confidence.toFixed(2)}${risk.degraded_confidence ? " (reduced)" : ""} · ${MODE_LABEL[risk.mode] || risk.mode}` }),
+      el("p", { className: "explain", text: data.evidence.score_explanation }),
+      risk.factors.length ? factorsTable(risk.factors) : null,
       data.evidence.injection_detected ? el("div", { className: "alert", text: "This message contains text aimed at tricking AI filters (prompt injection). That is itself a strong scam sign." }) : null,
       el("h3", { text: "Rules that fired" }),
       data.evidence.rule_explanations.length ? el("ul", { className: "plain" }, data.evidence.rule_explanations.map((r) => el("li", { text: r }))) : el("p", { text: "None." }));
@@ -407,7 +454,7 @@ function render(data, request) {
       details.append(el("p", { className: "hint", text: `AI classifier: ${data.llm.status}.` }));
     }
     details.append(el("p", { className: "hint", text: `Check ${data.case_id} · ${data.model_version} · ${data.latency_ms} ms` }));
-    nodes.push(details, feedbackBlock(data, request, state, draw));
+    panels.signs.append(details);
 
     ui.result.replaceChildren(...nodes.filter(Boolean));
     ui.result.hidden = false;
@@ -421,13 +468,26 @@ async function boot() {
   try {
     const res = await fetch("/api/analyze");
     const info = await res.json();
-    ui.pill.textContent = `${info.mode === "hybrid" ? "Rules + AI" : "Rules-only"} · nothing you enter is stored`;
+    ui.pill.textContent = "Messages aren’t stored · Links are never opened";
     const cases = info.demo_cases || [];
-    ui.examples.replaceChildren(...cases.map((c) =>
-      el("button", { className: "chip", type: "button", onClick: () => loadExample(c) },
-        c.image ? "📷 " : "", c.title, el("small", { text: c.group }))));
+    const groups = new Map();
+    const labels = { Normal: "Everyday messages", Attack: "Common scams", Negative: "Everyday messages", Screenshot: "Screenshot examples", Failure: "Advanced test cases", Adversarial: "Advanced test cases" };
+    ui.examples.replaceChildren(el("option", { value: "", text: "Choose a sample message…" }));
+    cases.forEach((c, i) => {
+      const name = labels[c.group] || "More examples";
+      if (!groups.has(name)) { const group = el("optgroup", { label: name }); groups.set(name, group); ui.examples.append(group); }
+      groups.get(name).append(el("option", { value: String(i), text: c.title }));
+    });
+    ui.examples.addEventListener("change", async () => {
+      if (ui.examples.value === "") return;
+      ui.examples.disabled = true;
+      try { await loadExample(cases[Number(ui.examples.value)]); }
+      catch { setStatus("Couldn't load that example. Please try another.", true); }
+      finally { ui.examples.disabled = false; }
+    });
   } catch {
-    ui.examples.replaceChildren(el("p", { className: "hint", text: "Examples unavailable right now." }));
+    ui.examples.replaceChildren(el("option", { text: "Examples unavailable right now" }));
+    ui.examples.disabled = true;
   }
 }
 
