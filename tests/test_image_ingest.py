@@ -143,7 +143,7 @@ def test_blank_image_is_insufficient_data(config, store):
 
 def test_rejected_upload_is_insufficient_data_and_audited(config, store):
     res, ex = Analyzer(config, store=store, use_llm=False).analyze_image(b"not an image")
-    assert res.signals.status is IngestStatus.INSUFFICIENT_DATA and res.signals.quality_flags == ("not_an_image",)
+    assert res.signals.status is IngestStatus.INSUFFICIENT_DATA and res.signals.quality_flags[0] == "not_an_image"
     assert json.loads(store.get_case(res.case_id)["signals"])["source"] == "image"
 
 
@@ -216,3 +216,97 @@ def test_ocr_sender_hint_restores_sender_checks(config):
     res, ex = Analyzer(config, use_llm=False).analyze_image(render_message(text, "billing@secure-pay-invoices.com"), record=False)
     assert ex.sender_hint == "billing@secure-pay-invoices.com"
     assert res.rules.fired("SENDER_MISMATCH") and res.tier.rank >= Tier.MEDIUM.rank
+
+
+# ------------------------------------------------------------------ layout-aware extraction (real phone screenshots)
+
+
+def _row(text, y, x=40, h=40, conf=0.95):
+    return OCRLine(text, conf, (x, y, x + 20 * len(text), y + h))
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["9:41 «ail", "9:41 |", "Text Message - Today 9:41 AM", "to me - 9:41 AM", "Today", "Delivered", "Yesterday 18:02", "iMessage"],
+)
+def test_interface_text_is_recognised(line):
+    from scamshield.image_ingest import is_chrome
+
+    assert is_chrome(line)
+
+
+@pytest.mark.parametrize("line", ["Today only: 50% off", "See you at 9:30 today", "Reply STOP to opt out", "Sent from my iPhone", "69877"])
+def test_message_text_is_not_mistaken_for_interface(line):
+    from scamshield.image_ingest import is_chrome
+
+    assert not is_chrome(line)
+
+
+def test_extract_message_strips_status_bar_lifts_sender_and_keeps_body():
+    from scamshield.image_ingest import extract_message
+
+    rows = [
+        _row("9:41 «ail", 20, conf=0.6),
+        _row("billing@secure-pay-invoices.com", 180),
+        _row("Text Message - Today 9:41 AM", 300),
+        _row("PayPal Invoice: Your account was", 420),
+        _row("charged $749.99. Call our billing", 470),
+        _row("department at +1 (808) 555-0147.", 520),
+    ]
+    ex = extract_message(rows)
+    assert ex.sender_hint == "billing@secure-pay-invoices.com"
+    assert ex.text.startswith("PayPal Invoice:")  # brand is at the start again, so the claim is detected
+    assert "9:41" not in ex.text and "Text Message" not in ex.text
+
+
+def test_extract_message_drops_gmail_preview_and_finds_sender_after_it():
+    from scamshield.image_ingest import extract_message
+
+    rows = [
+        _row("UPS: Your package 1Z999AA10123456784 is scheduled for d", 100),
+        _row("69877", 200),
+        _row("to me - 9:41 AM", 250),
+        _row("UPS: Your package 17999AA10123456784 is", 400),
+        _row("scheduled for delivery today between 2:00 PM and 6:00 PM.", 450),
+    ]
+    ex = extract_message(rows)
+    assert ex.sender_hint == "69877"
+    assert ex.text.count("UPS:") == 1
+
+
+def test_header_name_becomes_claimed_sender_but_stays_in_text():
+    from scamshield.image_ingest import extract_message
+
+    ex = extract_message([_row("Chase", 150), _row("Your account is locked. Verify at chase-secure-login.com now.", 400)])
+    assert ex.claimed_hint == "Chase" and ex.text.startswith("Chase")
+    urgent = extract_message([_row("URGENT", 150), _row("Your account is locked. Verify now.", 400)])
+    assert urgent.claimed_hint is None and "URGENT" in urgent.text
+
+
+def test_ocr_url_mangling_is_repaired():
+    from scamshield.image_ingest import extract_message
+
+    ex = extract_message([_row("Track your package: https.//www.,amazon.com/orders today.", 100)])
+    assert "https://www.amazon.com/orders" in ex.text
+
+
+def test_one_letter_misread_of_official_domain_is_not_a_full_lookalike_in_screenshots(config):
+    from conftest import msg
+
+    text = "Amazon: Your order has shipped. Track your package: https://www.amazan.com/progress-tracker/package"
+    analyzer = Analyzer(config, use_llm=False)
+    from_image = analyzer.analyze(msg(text, channel="email", sender="shipment-tracking@amazon.com"), record=False, extra_flags=("from_image",))
+    typed = analyzer.analyze(msg(text, channel="email", sender="shipment-tracking@amazon.com"), record=False)
+    assert from_image.rules.fired("POSSIBLE_LOOKALIKE_OCR") and not from_image.rules.fired("LOOKALIKE_DOMAIN")
+    assert from_image.tier.rank < Tier.HIGH.rank
+    assert typed.rules.fired("LOOKALIKE_DOMAIN") and not typed.rules.fired("POSSIBLE_LOOKALIKE_OCR")
+
+
+def test_real_lookalike_tricks_still_count_in_screenshots(config):
+    from conftest import msg
+
+    for host in ("paypa1-resolution.com", "chase-secure-verify.com", "amazon.com.account-check.io"):
+        res = Analyzer(config, use_llm=False).analyze(
+            msg(f"Verify your account now at https://{host}/login and reply with your code."), record=False, extra_flags=("from_image",)
+        )
+        assert res.rules.fired("LOOKALIKE_DOMAIN"), host

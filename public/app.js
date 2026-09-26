@@ -138,17 +138,24 @@ async function getWorker() {
   return workerPromise;
 }
 
-async function downscale(blob) {
-  // Large phone photos are slow to OCR in the browser; cap the long side. Re-drawing also drops EXIF.
+async function prepareForOcr(blob) {
+  // Same preprocessing as the benchmark (public/ocr-core.js, measured in eval/web_ocr):
+  // normalise size, invert dark-mode regions, and erase link underlines / bubble edges that
+  // make Tesseract skip whole lines. Drawing to a canvas also drops EXIF.
   const bitmap = await createImageBitmap(blob);
-  const scale = Math.min(1, MAX_OCR_SIDE / Math.max(bitmap.width, bitmap.height));
-  if (scale === 1) { bitmap.close(); return blob; }
+  const fit = Math.min(1, MAX_OCR_SIDE * 2 / Math.max(bitmap.width, bitmap.height)); // bound memory for huge photos
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
-  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  canvas.width = Math.max(1, Math.round(bitmap.width * fit));
+  canvas.height = Math.max(1, Math.round(bitmap.height * fit));
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close();
-  return new Promise((resolve) => canvas.toBlob((b) => resolve(b || blob), "image/png"));
+  const src = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const out = window.ScamShieldOCRCore.prepare(src);
+  canvas.width = out.width;
+  canvas.height = out.height;
+  ctx.putImageData(new ImageData(out.data, out.width, out.height), 0, 0);
+  return canvas;
 }
 
 function showProgress(fraction) {
@@ -177,7 +184,7 @@ async function readImage(blob) {
       if (m.status === "recognizing text") { setStatus("Reading the text on your device..."); showProgress(m.progress); }
     };
     const worker = await getWorker();
-    const { data } = await worker.recognize(await downscale(blob));
+    const { data } = await worker.recognize(await prepareForOcr(blob));
     const lines = (data.lines || [])
       .map((l) => ({ text: (l.text || "").trim(), confidence: l.confidence, bbox: [l.bbox.x0, l.bbox.y0, l.bbox.x1, l.bbox.y1] }))
       .filter((l) => l.text);

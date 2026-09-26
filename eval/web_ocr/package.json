@@ -1,0 +1,11 @@
+{
+  "name": "scamshield-ocr-bench",
+  "private": true,
+  "type": "module",
+  "description": "Benchmarks the website's in-browser OCR (Tesseract.js) on eval/screens",
+  "dependencies": {
+    "jpeg-js": "0.4.4",
+    "pngjs": "7.0.0",
+    "tesseract.js": "5.1.1"
+  }
+}

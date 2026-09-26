@@ -72,7 +72,7 @@ class Analyzer:
             text=extraction.text,
             channel=channel,
             sender_id=sender_id or extraction.sender_hint,
-            claimed_sender=claimed_sender,
+            claimed_sender=claimed_sender or extraction.claimed_hint,
             known_contact=known_contact,
         )
         precheck = () if extraction.ok else (extraction.quality_flags or ("no_text_in_image",))
@@ -82,7 +82,7 @@ class Analyzer:
             record=record,
             source=extraction.audit_meta(),
             precheck_flags=precheck,
-            extra_flags=tuple(f for f in extraction.quality_flags if extraction.ok),
+            extra_flags=("from_image",) + tuple(f for f in extraction.quality_flags if extraction.ok),
         )
         return result, extraction
 

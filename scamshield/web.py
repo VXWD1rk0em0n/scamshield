@@ -24,7 +24,7 @@ from collections import deque
 from scamshield import RULESET_VERSION, __version__
 from scamshield.config import load_config
 from scamshield.demo_cases import DEMO_CASES
-from scamshield.image_ingest import OCRLine, clean_ocr_text, lines_to_text
+from scamshield.image_ingest import OCRLine, extract_message
 from scamshield.models import AnalysisResult, Channel, MessageInput
 from scamshield.pipeline import Analyzer
 
@@ -187,7 +187,7 @@ def _opt_str(payload: dict, key: str) -> str | None:
     return value.strip()[:MAX_FIELD_CHARS] or None
 
 
-def _ocr_text(ocr: object) -> tuple[str, str | None, float | None]:
+def _ocr_text(ocr: object) -> tuple[str, str | None, str | None, float | None]:
     if not isinstance(ocr, dict) or not isinstance(ocr.get("lines"), list):
         raise BadRequest("ocr.lines must be a list")
     raw_lines = ocr["lines"]
@@ -203,9 +203,9 @@ def _ocr_text(ocr: object) -> tuple[str, str | None, float | None]:
         conf = item.get("confidence", 0)
         conf = float(conf) / (100.0 if isinstance(conf, (int, float)) and conf > 1 else 1.0) if isinstance(conf, (int, float)) else 0.0
         lines.append(OCRLine(item["text"][:1000], max(0.0, min(1.0, conf)), tuple(float(v) for v in bbox)))  # type: ignore[arg-type]
-    text, sender_hint = clean_ocr_text(lines_to_text(lines))
+    extracted = extract_message(lines)
     mean = sum(l.confidence for l in lines) / len(lines) if lines else None
-    return text, sender_hint, mean
+    return extracted.text, extracted.sender_hint, extracted.claimed_hint, mean
 
 
 def parse_request(payload: object) -> tuple[MessageInput, dict | None]:
@@ -223,14 +223,16 @@ def parse_request(payload: object) -> tuple[MessageInput, dict | None]:
             raise BadRequest(f"{flag} must be a boolean")
     source = None
     if payload.get("ocr") is not None:
-        text, sender_hint, mean = _ocr_text(payload["ocr"])
+        text, sender_hint, claimed_hint, mean = _ocr_text(payload["ocr"])
         sender = sender or (sender_hint[:MAX_FIELD_CHARS] if sender_hint else None)
+        claimed = claimed or (claimed_hint[:MAX_FIELD_CHARS] if claimed_hint else None)
         source = {
             "source": "image",
             "ocr_engine": "tesseract.js (in browser)",
             "ocr_confidence": None if mean is None else round(mean, 3),
             "ocr_lines": len(payload["ocr"]["lines"]),
             "sender_hint": sender_hint,
+            "claimed_hint": claimed_hint,
         }
     else:
         text = payload.get("text", "")
@@ -273,7 +275,12 @@ def handle_post(body: bytes, client_key: str = "anon") -> tuple[int, dict]:
     except BadRequest as exc:
         return 400, {"error": str(exc)}
     result = get_analyzer().analyze(
-        msg, user_id=None, record=False, source=source, trusted_sender=bool(payload.get("trusted_sender", False))
+        msg,
+        user_id=None,
+        record=False,
+        source=source,
+        trusted_sender=bool(payload.get("trusted_sender", False)),
+        extra_flags=("from_image",) if source else (),
     )
     body_out = serialize(result)
     if source:

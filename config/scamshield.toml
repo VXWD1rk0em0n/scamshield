@@ -60,6 +60,7 @@ PAYMENT_REDIRECTION = 30
 UPFRONT_FEE = 20
 CALLBACK_LURE = 15
 AUTHORITY_CLAIM = 5
+POSSIBLE_LOOKALIKE_OCR = 15   # screenshots only: one letter off an official domain (typo or OCR misread)
 # Negative (benign) signals. Only credited when no request/impersonation rule fired,
 # so an attacker cannot buy a lower score by pasting reassuring boilerplate.
 PROTECTIVE_LANGUAGE = -15

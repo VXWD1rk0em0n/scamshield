@@ -7,3 +7,4 @@ pytest>=8.0,<10
 Pillow>=10.1,<13
 numpy>=1.24
 rapidocr-onnxruntime==1.4.4
+wordninja==2.0.0

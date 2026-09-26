@@ -53,6 +53,7 @@ class ImageExtraction:
     height: int = 0
     latency_ms: float = 0.0
     sender_hint: str | None = None
+    claimed_hint: str | None = None
 
     def audit_meta(self) -> dict:
         return {
@@ -205,14 +206,224 @@ _SENDER_LINE = re.compile(
     r"^(\+?[\d\s().-]{5,20}|[\w.+-]+@[\w-]+(\.[\w-]+)+|\d{5,6})$"
 )
 # OCR confusions that matter for detection: '£' is read as 'f' before an amount.
-_OCR_REPAIRS = ((re.compile(r"(?<![A-Za-z])f(?=\d{1,3}(?:[,.]\d{3})*(?:\.\d{2})?\b)"), "£"),)
+_OCR_REPAIRS = (
+    (re.compile(r"(?<![A-Za-z])f(?=\d{1,3}(?:[,.]\d{3})*(?:\.\d{2})?\b)"), "£"),  # '£' read as 'f'
+    (re.compile(r"\b(https?)[.,;]?/{1,2}(?=[\w.-])", re.I), r"\1://"),  # 'https.//', 'https:/' -> 'https://'
+    (re.compile(r"\bwww[.,]{1,2}(?=\w)", re.I), "www."),  # 'www.,amazon' -> 'www.amazon'
+)
+
+
+# Words that make up phone / mail-app interface text around a message ("Text Message ·
+# Today 9:41 AM", "to me", "Delivered", "Type a message"). A row made only of these words
+# plus times/dates - and containing at least one strong marker - is interface, not content.
+_CHROME_WORDS = frozenset(
+    """text message messages imessage sms mms rcs chat today yesterday now just delivered read sent seen edited
+    am pm to me via end encrypted type a an at on from reply more details unknown sender contact info
+    mon monday tue tues tuesday wed wednesday thu thur thurs thursday fri friday sat saturday sun sunday
+    jan january feb february mar march apr april may jun june jul july aug august sep sept september
+    oct october nov november dec december""".split()
+)
+_CHROME_MARKERS = frozenset(
+    "message messages imessage sms mms rcs today yesterday now delivered read seen edited me".split()
+)
+_TIME_TOKEN = re.compile(r"^\d{1,2}[:.]\d{2}([ap]m)?$|^\d{1,2}/\d{1,2}(/\d{2,4})?$|^\d{1,2}([ap]m)$", re.I)
+_NAME_HEADER = re.compile(r"^[A-Za-z][A-Za-z&'.-]*( [A-Za-z&'.()-]+){0,3}$")
+_NOT_NAMES = frozenset("urgent important alert notice warning reminder hi hello hey dear attention final notice".split())
+
+
+def _tokens(line: str) -> list[str]:
+    return [t for t in (re.sub(r"[^\w:/.@+-]", "", w).strip(".-") for w in line.split()) if t]
+
+
+_CHROME_SQUASHED = re.compile(
+    r"^(?:" + "|".join(sorted(_CHROME_WORDS, key=len, reverse=True))
+    + r"|\d{1,2}[:.]\d{2}(?:am|pm)?|\d{1,2}/\d{1,2}(?:/\d{2,4})?|[·•|,.:()-])+$"
+)
+
+
+def is_chrome(line: str) -> bool:
+    """Interface text (timestamps, 'Text Message', 'to me', status bar), not message content."""
+    squashed = re.sub(r"\s+", "", line)
+    if _CHROME.match(squashed):
+        return True
+    low = squashed.lower()
+    # OCR engines sometimes drop the spaces: "TextMessage·Today9:41AM"
+    if len(low) <= 40 and _CHROME_SQUASHED.match(low) and (
+        any(m in low for m in _CHROME_MARKERS) or re.search(r"\d{1,2}[:.]\d{2}", low)
+    ):
+        return True
+    toks = _tokens(line)
+    if not toks:
+        return True  # only punctuation / icon glyphs
+    words = [t.lower() for t in toks if not _TIME_TOKEN.match(t)]
+    has_time = len(words) < len(toks)
+    alpha = [w for w in words if w.isalpha()]
+    if len(toks) <= 8 and alpha and all(w in _CHROME_WORDS for w in alpha) and len(alpha) == len(words):
+        return has_time or any(w in _CHROME_MARKERS for w in alpha)
+    # status bar: a clock plus a couple of misread signal/battery glyphs ("9:41 «ail")
+    return has_time and len(words) <= 2 and all(len(w) <= 4 for w in words)
+
+
+def _is_garbage(row: OCRLine) -> bool:
+    alnum = sum(c.isalnum() for c in row.text)
+    return alnum < 2 or (alnum / max(1, len(row.text.replace(" ", ""))) < 0.5 and row.confidence < 0.6)
+
+
+def _norm_words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _is_preview_of(row_text: str, rest: str) -> bool:
+    """Subject/preview rows that repeat the start of the body (OCR reads each copy a bit differently)."""
+    words = _norm_words(row_text)
+    if len(words) < 3:
+        return False
+    body = _norm_words(rest)[: len(words) * 2 + 4]
+    pool = list(body)
+    hits = 0
+    for w in words[:-1]:  # last word is often cut off ("for d...")
+        if w in pool:
+            pool.remove(w)
+            hits += 1
+    return hits >= 0.8 * (len(words) - 1)
+
+
+@dataclass(frozen=True)
+class MessageExtraction:
+    text: str
+    sender_hint: str | None = None
+    claimed_hint: str | None = None
+    dropped: tuple[str, ...] = ()
+
+
+def extract_message(lines: list[OCRLine]) -> MessageExtraction:
+    """Turn OCR boxes from a phone/mail screenshot into the message a user would paste:
+    drop interface text, lift the sender from the header, drop duplicated previews,
+    then join wrapped lines and URLs."""
+    rows = [r for r in _rows(lines) if r.text.strip()]
+    dropped: list[str] = []
+    kept: list[OCRLine] = []
+    for r in rows:
+        if is_chrome(r.text) or _is_garbage(r):
+            dropped.append(r.text)
+        else:
+            kept.append(r)
+    sender = claimed = None
+    # header zone: rows before the first body-like row (a sentence, or 5+ words)
+    header_end = next(
+        (i for i, r in enumerate(kept) if len(r.text.split()) >= 5 or re.search(r"[.!?]\s*$", r.text)), len(kept)
+    )
+    for i, r in enumerate(kept[: min(len(kept), max(header_end, 1) + 2)]):
+        candidate = r.text.strip()
+        if sender is None and len(candidate) <= 50 and _SENDER_LINE.match(candidate):
+            sender = candidate
+            kept[i] = OCRLine("", r.confidence, r.box)
+    kept = [r for r in kept if r.text]
+    for r in kept[: max(0, header_end - (1 if sender else 0))]:
+        # A short title-like header ("Chase", "Amazon", "Mom") is who the phone shows as the
+        # sender. It is passed on as the claimed sender and kept in the text, so a lone first
+        # line such as "URGENT" is never silently removed.
+        candidate = r.text.strip()
+        if (claimed is None and len(candidate) <= 30 and _NAME_HEADER.match(candidate)
+                and candidate.lower() not in _NOT_NAMES and len(kept) > 1):
+            claimed = candidate
+    # duplicated subject/preview rows before the body
+    body_start = 0
+    while body_start < len(kept) - 1 and _is_preview_of(kept[body_start].text, " ".join(r.text for r in kept[body_start + 1 :])):
+        dropped.append(kept[body_start].text)
+        body_start += 1
+    text = lines_to_text(kept[body_start:])
+    for pattern, repl in _OCR_REPAIRS:
+        text = pattern.sub(repl, text)
+    return MessageExtraction(text=text, sender_hint=sender, claimed_hint=claimed, dropped=tuple(dropped))
+
+
+_URLISH = re.compile(r"(https?://|hxxps?://|www\.|@|\.[a-z]{2,6}(/|\b))", re.I)
+_RUN = re.compile(r"[A-Za-z']+|[^A-Za-z']+")
+_wordcost: dict[str, float] | None = None
+
+
+def _protected_words() -> frozenset[str]:
+    from scamshield.brands import BRANDS
+
+    words = {b.key for b in BRANDS}
+    for b in BRANDS:
+        words.update(a.lower() for a in (*b.aliases, *b.case_sensitive_aliases) if " " not in a)
+    return frozenset(words)
+
+
+def respace_ocr(text: str) -> str:
+    """Re-insert spaces that an OCR engine dropped ("onyouraccount" -> "on your account").
+
+    Only letter runs that are not dictionary words are split, a split is kept only if every
+    piece is a dictionary word, and brand names ("PayPal") are never split. URLs and e-mail
+    addresses are left untouched. Needs the optional `wordninja` package; a no-op without it."""
+    global _wordcost
+    try:
+        import wordninja
+    except ImportError:
+        return text
+    if _wordcost is None:
+        _wordcost = wordninja.DEFAULT_LANGUAGE_MODEL._wordcost  # noqa: SLF001 - public in practice
+    protected = _protected_words()
+
+    def is_word(w: str) -> bool:
+        return w.lower() in _wordcost or w.lower() in protected
+
+    def fix_run(run: str) -> str:
+        contraction = re.match(r"^([A-Za-z]+'(?:ve|m|re|s|t|ll|d))([A-Za-z]{3,})$", run)
+        if contraction:  # "I'vebeenmaking" -> "I've been making"
+            return contraction.group(1) + " " + fix_run(contraction.group(2))
+        if len(run) < 4 or is_word(run) or not run.isalpha():
+            return run
+        pieces = wordninja.split(run)
+        # re-glue brand names the segmenter split ("Pay" "Pal" -> "PayPal")
+        merged: list[str] = []
+        for p in pieces:
+            if merged and (merged[-1] + p).lower() in protected:
+                merged[-1] += p
+            else:
+                merged.append(p)
+        ok = len(merged) > 1 and all(is_word(p) and (len(p) > 1 or p.lower() in {"a", "i"}) for p in merged)
+        return " ".join(merged) if ok else run
+
+    if not text:
+        return text
+    # "limited.We" -> "limited. We" (sentence break the OCR glued), except inside links / addresses
+    text = " ".join(
+        t if re.search(r"https?://|www\.|@", t, re.I) else re.sub(r"(?<=[a-z])([.!?])(?=[A-Z][a-z])", r"\1 ", t)
+        for t in text.split(" ")
+    )
+    out = []
+    for token in text.split(" "):
+        if _URLISH.search(token):
+            out.append(token)
+            continue
+        rebuilt = ""
+        last_word = ""  # last dictionary word emitted in this token (for digit boundaries)
+        for part in _RUN.findall(token):
+            if part[0].isalpha() or part[0] == "'":
+                piece = fix_run(part)
+                first = piece.split(" ")[0]
+                if rebuilt and rebuilt[-1].isdigit() and len(first) >= 3 and is_word(first):
+                    piece = " " + piece  # "5Apple" -> "5 Apple" (but "1Z999" stays)
+                last_word = piece.split(" ")[-1] if is_word(piece.split(" ")[-1]) else ""
+            else:
+                piece = part
+                if part[0].isdigit() and len(last_word) >= 3 and rebuilt.endswith(last_word):
+                    piece = " " + part  # "tobuy5" -> "to buy 5" (but "m365" stays)
+                if re.fullmatch(r"[,?!;:]+", part):
+                    piece = part + " "
+                last_word = ""
+            rebuilt += piece
+        out.append(rebuilt.strip())
+    return re.sub(r" {2,}", " ", " ".join(out))
 
 
 def clean_ocr_text(text: str) -> tuple[str, str | None]:
-    """Drop UI chrome (timestamps, 'Delivered'), lift a leading sender line out as a hint,
-    and repair OCR confusions that change meaning. Returns (text, sender_hint)."""
-    paragraphs = [p for p in text.split("\n") if p.strip()]
-    paragraphs = [p for p in paragraphs if not _CHROME.match(re.sub(r"\s+", "", p))]
+    """Paragraph-level cleanup for already-assembled OCR text: drop UI chrome, lift a
+    leading sender line out as a hint, repair meaning-changing OCR confusions."""
+    paragraphs = [p for p in text.split("\n") if p.strip() and not is_chrome(p)]
     sender = None
     if len(paragraphs) > 1 and len(paragraphs[0]) <= 50 and _SENDER_LINE.match(paragraphs[0].strip()):
         sender = paragraphs.pop(0).strip()
@@ -260,13 +471,20 @@ class LocalOCR:
         if not self.available():
             return ImageExtraction(False, "", self.name, ("ocr_unavailable",), width=image.width, height=image.height)
         started = time.perf_counter()
+        if image.width < 1000:
+            # Forwarded / compressed screenshots are small; the detector misses text below ~20 px.
+            # Benchmarked in eval/web_ocr/score_local.py: word recall 0.33 -> 0.66 on those images.
+            scale = min(1400 / image.width, 6000 / max(1, image.height))
+            image = image.resize((round(image.width * scale), round(image.height * scale)))
         raw, _elapsed = self._get()(np.array(image))
         lines = []
         for box, text, conf in raw or []:
             xs = [float(p[0]) for p in box]
             ys = [float(p[1]) for p in box]
-            lines.append(OCRLine(str(text), float(conf), (min(xs), min(ys), max(xs), max(ys))))
-        text, sender_hint = clean_ocr_text(lines_to_text(lines))
+            # this model drops spaces between words on low-resolution text ("onyouraccount")
+            lines.append(OCRLine(respace_ocr(str(text)), float(conf), (min(xs), min(ys), max(xs), max(ys))))
+        extracted = extract_message(lines)
+        text, sender_hint = extracted.text, extracted.sender_hint
         mean = statistics.fmean([ln.confidence for ln in lines]) if lines else None
         return ImageExtraction(
             ok=True,
@@ -278,6 +496,7 @@ class LocalOCR:
             height=image.height,
             latency_ms=(time.perf_counter() - started) * 1000,
             sender_hint=sender_hint,
+            claimed_hint=extracted.claimed_hint,
         )
 
 
@@ -386,4 +605,5 @@ def extract_text(data: bytes, limits: ImageLimits, engine: OCREngine | None = No
         height=result.height,
         latency_ms=result.latency_ms,
         sender_hint=result.sender_hint,
+        claimed_hint=result.claimed_hint,
     )

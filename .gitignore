@@ -10,3 +10,8 @@ data/.pepper
 
 .vercel
 .env*
+eval/screens/
+eval/node_modules/
+eval/web_ocr/node_modules/
+eval/web_ocr/out/
+eval/web_ocr/*.traineddata

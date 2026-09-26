@@ -18,6 +18,7 @@ from scamshield.brands import (
     FREEMAIL_DOMAINS,
     Brand,
     brand_from_claim,
+    damerau_levenshtein,
     deleet,
     find_brand_mentions,
     find_lookalike,
@@ -58,6 +59,7 @@ RULE_SPECS: tuple[RuleSpec, ...] = (
     RuleSpec("R18", "UPFRONT_FEE", "request", "Small fee to release a package, prize, job, or loan"),
     RuleSpec("R19", "CALLBACK_LURE", "request", "Pushes you to call a number in the message about a problem"),
     RuleSpec("R20", "AUTHORITY_CLAIM", "impersonation", "Claims to be a bank, government, company, or executive"),
+    RuleSpec("R21", "POSSIBLE_LOOKALIKE_OCR", "link", "Screenshot link is one letter off an official domain - lookalike or OCR misread"),
     RuleSpec("N01", "PROTECTIVE_LANGUAGE", "benign", "Legitimate safety wording: 'we will never ask for your code'"),
     RuleSpec("N02", "OFFICIAL_LINKS_ONLY", "benign", "Every link goes to an official brand domain"),
     RuleSpec("N03", "KNOWN_CONTACT", "benign", "User marked the sender as a known contact"),
@@ -433,6 +435,19 @@ def _d_p2p(s: Signals, _: dict) -> Detection | None:
     return ("Asks you to send money over a peer-to-peer app", spans) if spans else None
 
 
+def _ocr_ambiguous_typo(s: Signals, host: str) -> Brand | None:
+    """For screenshot input only: a host one letter off an official brand domain could be a
+    typosquat or an OCR misread ('amazan.com'). Leetspeak, brand+affix and subdomain tricks
+    are never ambiguous and still count as lookalikes."""
+    if "from_image" not in s.quality_flags:
+        return None
+    match = find_lookalike(host)
+    if not match or match.technique != "typosquat":
+        return None
+    label = registrable_domain(host).split(".")[0]
+    return match.brand if damerau_levenshtein(deleet(label), match.brand.key) <= 1 else None
+
+
 def _brand_lookalikes(s: Signals) -> list[tuple[str, str, Span | None]]:
     """(domain, explanation, span) for every lookalike host found."""
     found: list[tuple[str, str, Span | None]] = []
@@ -441,6 +456,8 @@ def _brand_lookalikes(s: Signals) -> list[tuple[str, str, Span | None]]:
         if (u.has_homoglyphs or u.is_punycode) and official:
             found.append((u.host, f"'{u.host}' spells {official.display} with look-alike Unicode letters", (u.start, u.end)))
             continue
+        if _ocr_ambiguous_typo(s, u.host):
+            continue  # reported by POSSIBLE_LOOKALIKE_OCR instead
         match = find_lookalike(u.host)
         if match:
             found.append((u.host, f"'{u.host}' imitates {match.brand.display} ({match.technique})", (u.start, u.end)))
@@ -507,6 +524,8 @@ def _d_sender_mismatch(s: Signals, ctx: dict) -> Detection | None:
         for u in s.urls:
             reg = u.registrable_domain
             other_official = official_brand_for_domain(u.host)
+            if _ocr_ambiguous_typo(s, u.host) is brand:
+                continue  # one letter off the brand's own domain in a screenshot: see POSSIBLE_LOOKALIKE_OCR
             if u.has_homoglyphs or u.is_punycode or (reg not in brand.domains and other_official is None):
                 reasons.append(f"claims to be {brand.display} but links to {u.host}")
                 spans.append((u.start, u.end))
@@ -628,6 +647,18 @@ def _d_official_links(s: Signals, _: dict) -> Detection | None:
     return (f"All links go to official {', '.join(brands)} domains", [(u.start, u.end) for u in s.urls])
 
 
+def _d_possible_ocr_lookalike(s: Signals, _: dict) -> Detection | None:
+    hits = [(u, b) for u in s.urls if (b := _ocr_ambiguous_typo(s, u.host))]
+    if not hits:
+        return None
+    names = ", ".join(sorted({f"'{u.host}' (vs {b.display})" for u, b in hits}))
+    return (
+        f"Link {names} is one letter off the official domain - either a lookalike or a misread of the "
+        "screenshot. Check the link in the original message letter by letter.",
+        [(u.start, u.end) for u, _ in hits],
+    )
+
+
 def _d_known_contact(s: Signals, _: dict) -> Detection | None:
     return ("You marked this sender as a known contact", []) if s.known_contact else None
 
@@ -657,6 +688,7 @@ DETECTORS: dict[str, Callable[[Signals, dict], Detection | None]] = {
     "UPFRONT_FEE": _simple(_UPFRONT_FEE, "Asks for a fee up front to release a package, prize, job or funds"),
     "CALLBACK_LURE": _d_callback,
     "AUTHORITY_CLAIM": _d_authority,
+    "POSSIBLE_LOOKALIKE_OCR": _d_possible_ocr_lookalike,
     "PROTECTIVE_LANGUAGE": _d_protective,
     "OFFICIAL_LINKS_ONLY": _d_official_links,
     "KNOWN_CONTACT": _d_known_contact,
