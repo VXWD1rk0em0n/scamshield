@@ -1,0 +1,15 @@
+# Only the web front end (public/), the API function (api/), the pipeline package and config are deployed.
+/requirements.txt
+.venv
+.streamlit
+.pytest_cache
+__pycache__
+tests
+eval
+data
+assets
+scripts
+app.py
+*.md
+.env
+.env.*

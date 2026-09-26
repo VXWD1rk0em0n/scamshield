@@ -208,6 +208,31 @@ streamlit run app.py
 
 Open http://localhost:8501. The tabs are **Analyze** (paste text, upload a screenshot/photo, or take a photo with the camera), **Demo cases** (one click each for normal / attack / negative / failure / adversarial / screenshot), **Analyst queue**, **Metrics** and **Audit log**. The walkthrough is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
 
+## 9b. Public web version (Vercel)
+
+The Streamlit app is the full tool (analyst queue, audit log, local OCR). For a public link there is a lightweight web version:
+
+```
+public/            static front end (index.html, app.js, styles.css) - vanilla JS, no build step
+api/analyze.py     Vercel Python function -> scamshield/web.py -> the same pipeline
+vercel.json        CSP + security headers, function config
+.vercelignore      deploys only public/, api/, scamshield/, config/
+```
+
+- **Stateless and private by default**: no audit database, no analyst queue. Nothing a visitor submits is stored.
+- **Screenshots are read in the visitor's browser** with Tesseract.js, which is loaded from jsDelivr with a Subresource Integrity hash. Only the recognised text lines are sent to the API, where they are re-assembled with the same row/URL-join and chrome-cleanup code as the desktop app. The image never leaves the device.
+- **Rules-only unless you opt in**: the AI classifier runs only if the Vercel project has both `ANTHROPIC_API_KEY` and `SCAMSHIELD_WEB_LLM=on`. A key alone never enables paid calls on a public endpoint.
+- **Hardening**: strict CSP (no inline scripts or styles, `frame-ancestors 'none'`); all untrusted text inserted with `textContent`; 64 KB body cap; 400-line OCR cap; per-instance rate limit (30 requests/min per IP; add a Vercel Firewall rate-limit rule for real protection); `Cache-Control: no-store` on API responses.
+- **Trusted senders** are kept in the visitor's own browser (`localStorage`) and sent as a flag. Appeals unlock links locally. "Report scam" points to 7726 / reportfraud.ftc.gov / NCSC.
+
+Run it locally exactly as deployed (same headers, same handler):
+
+```powershell
+python scripts/dev_server.py
+```
+
+Then open http://localhost:3000. To deploy, run `npx vercel login` once, then `npx vercel --prod` from the repo root. Alternatively, import the GitHub repo at vercel.com/new (framework preset "Other"; no build command needed).
+
 ## 10. How to test
 
 ```powershell

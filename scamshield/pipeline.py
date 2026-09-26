@@ -95,7 +95,10 @@ class Analyzer:
         source: dict | None = None,
         precheck_flags: tuple[str, ...] = (),
         extra_flags: tuple[str, ...] = (),
+        trusted_sender: bool | None = None,
     ) -> AnalysisResult:
+        """``trusted_sender`` overrides the audit-store lookup (the web app keeps the
+        trusted list in the visitor's browser instead of a server database)."""
         started = time.perf_counter()
         case_id = uuid.uuid4().hex[:12]
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -108,7 +111,10 @@ class Analyzer:
 
         rules = risk = evidence = llm_result = None
         if signals.ok:
-            trusted = bool(self.store and self.store.is_trusted(user_id, msg.sender_id))
+            if trusted_sender is None:
+                trusted = bool(self.store and self.store.is_trusted(user_id, msg.sender_id))
+            else:
+                trusted = trusted_sender and bool(msg.sender_id)
             rules = run_rules(signals, self.config, trusted_sender=trusted)
             llm_result = self._llm_step(rules.score, signals, masked)
             risk = score(rules, llm_result, self.config)

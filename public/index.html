@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScamShield - is this message a scam?</title>
+  <meta name="description" content="Paste a text, email or chat message - or add a screenshot - and see the scam warning signs before you click, pay, or share a code.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%232a78d6' d='M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z'/%3E%3Cpath fill='white' d='m10.6 15.2-3-3 1.4-1.4 1.6 1.6 4.4-4.4 1.4 1.4z'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="site">
+    <div class="wrap">
+      <div class="brand">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#2a78d6" d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/><path fill="#fff" d="m10.6 15.2-3-3 1.4-1.4 1.6 1.6 4.4-4.4 1.4 1.4z"/></svg>
+        ScamShield
+      </div>
+      <span class="pill" id="mode-pill">Nothing you enter is stored</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="intro">
+      <h1>Is this message a scam?</h1>
+      <p>Paste a text, email or chat message - or add a screenshot. ScamShield points out the warning signs before you click, pay, or share a code.</p>
+    </section>
+
+    <section class="card" aria-labelledby="input-title">
+      <h2 id="input-title" class="visually-hidden" hidden>Message to check</h2>
+      <div class="seg" role="tablist" aria-label="Input type">
+        <button type="button" role="tab" id="tab-text" aria-selected="true" aria-controls="text-panel">Paste text</button>
+        <button type="button" role="tab" id="tab-image" aria-selected="false" aria-controls="image-panel">Screenshot or photo</button>
+      </div>
+
+      <div id="image-panel" role="tabpanel" aria-labelledby="tab-image" hidden>
+        <label class="drop" id="drop" for="file-input">
+          <strong>Choose a screenshot</strong>
+          <span>or drop it here - PNG, JPG or WEBP, up to 8 MB</span>
+        </label>
+        <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" hidden>
+        <div class="image-row">
+          <label class="btn" for="camera-input">Take a photo</label>
+          <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
+        </div>
+        <p class="hint">🔒 The text is read on your device. Your image never leaves this browser - only the words are checked.</p>
+        <div class="progress" id="ocr-progress" hidden><div></div></div>
+        <img id="preview" class="preview" alt="Your image" hidden>
+      </div>
+
+      <div id="text-panel" role="tabpanel" aria-labelledby="tab-text">
+        <label for="message" class="label">Message</label>
+        <textarea id="message" maxlength="8000" placeholder="Paste the message here..." spellcheck="false"></textarea>
+        <details class="more">
+          <summary>Sender details (optional - makes the check more accurate)</summary>
+          <div class="grid">
+            <div>
+              <label for="channel">Where did it arrive?</label>
+              <select id="channel">
+                <option value="sms">Text message (SMS)</option>
+                <option value="email">Email</option>
+                <option value="chat">Chat app / DM</option>
+              </select>
+            </div>
+            <div>
+              <label for="sender">Sender number or address</label>
+              <input type="text" id="sender" maxlength="200" placeholder="+1 415 555 0132 or name@site.com" autocomplete="off">
+            </div>
+            <div>
+              <label for="claimed">Who it claims to be</label>
+              <input type="text" id="claimed" maxlength="200" placeholder="e.g. Chase, 'your boss'" autocomplete="off">
+            </div>
+            <div class="check">
+              <input type="checkbox" id="known">
+              <label for="known">I know this sender</label>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn primary" id="analyze">Check message</button>
+        <span class="status" id="status" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section aria-labelledby="examples-title">
+      <h2 id="examples-title">Try an example</h2>
+      <div class="chips" id="examples"></div>
+    </section>
+
+    <section class="card" id="result" aria-live="polite" hidden></section>
+
+    <section class="card trusted" id="trusted-card" hidden>
+      <h2>Your trusted senders</h2>
+      <p class="hint">Saved only in this browser. Trusted senders get a lower risk score; lookalike links still get flagged.</p>
+      <ul id="trusted-list"></ul>
+    </section>
+
+    <section class="about" aria-labelledby="how-title">
+      <h2 id="how-title">How it works</h2>
+      <ul>
+        <li>20 transparent rules look for the tricks scammers use: requests for codes or passwords, gift-card and crypto payments, lookalike links (<code>chase-secure-verify.com</code>), impersonation, pressure and secrecy, hidden characters, and text aimed at fooling AI filters.</li>
+        <li>Every warning points at the exact words that triggered it, and the score explains itself.</li>
+        <li>Personal details (phone numbers, emails, card numbers, one-time codes) are masked before any AI model sees the text. Links are never opened.</li>
+        <li>This public demo stores nothing. It is a prototype tested on synthetic messages - a low score is not a guarantee. When in doubt, contact the company using a number you already have.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    ScamShield · MIT licensed · <a href="https://github.com/VXWD1rk0em0n/scamshield" rel="noopener">Source &amp; limitations on GitHub</a>
+  </footer>
+</body>
+</html>
