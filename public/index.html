@@ -5,55 +5,57 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ScamShield - is this message a scam?</title>
   <meta name="description" content="Paste a text, email or chat message - or add a screenshot - and see the scam warning signs before you click, pay, or share a code.">
-  <meta name="color-scheme" content="light dark">
+  <meta name="color-scheme" content="light">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%232a78d6' d='M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z'/%3E%3Cpath fill='white' d='m10.6 15.2-3-3 1.4-1.4 1.6 1.6 4.4-4.4 1.4 1.4z'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#checker">Skip to message checker</a>
   <header class="site">
     <div class="wrap">
       <div class="brand">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#2a78d6" d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/><path fill="#fff" d="m10.6 15.2-3-3 1.4-1.4 1.6 1.6 4.4-4.4 1.4 1.4z"/></svg>
         ScamShield
       </div>
-      <span class="pill" id="mode-pill">Nothing you enter is stored</span>
+      <nav aria-label="Main navigation"><a href="#checker" class="nav-active">Message checker</a><a href="#how-title">How it works</a></nav>
     </div>
   </header>
 
   <main class="wrap">
     <section class="intro">
-      <h1>Is this message a scam?</h1>
-      <p>Paste a text, email or chat message - or add a screenshot. ScamShield points out the warning signs before you click, pay, or share a code.</p>
+      <div class="eyebrow">A second look. Before you click.</div>
+      <h1>Something feel off?</h1>
+      <p>Check a suspicious message. Understand the warning signs.<br class="desktop-break"> Decide what to do next.</p>
     </section>
-
-    <section class="card" aria-labelledby="input-title">
-      <h2 id="input-title" class="visually-hidden" hidden>Message to check</h2>
+    <div class="workspace" id="checker">
+    <section class="card input-card" aria-labelledby="input-title">
+      <div class="section-heading"><h2 id="input-title">Check a message</h2><span class="step-label">01 / INPUT</span></div>
       <div class="seg" role="tablist" aria-label="Input type">
-        <button type="button" role="tab" id="tab-text" aria-selected="true" aria-controls="text-panel">Paste text</button>
-        <button type="button" role="tab" id="tab-image" aria-selected="false" aria-controls="image-panel">Screenshot or photo</button>
+        <button type="button" role="tab" id="tab-text" aria-selected="true" aria-controls="text-panel">Paste a message</button>
+        <button type="button" role="tab" id="tab-image" aria-selected="false" aria-controls="image-panel">Upload a screenshot</button>
       </div>
 
       <div id="image-panel" role="tabpanel" aria-labelledby="tab-image" hidden>
-        <label class="drop" id="drop" for="file-input">
+        <label class="drop" id="drop" for="file-input" tabindex="0" role="button">
           <strong>Choose a screenshot</strong>
           <span>or drop it here - PNG, JPG or WEBP, up to 8 MB</span>
         </label>
         <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" hidden>
         <div class="image-row">
-          <label class="btn" for="camera-input">Take a photo</label>
+          <label class="btn" for="camera-input" tabindex="0" role="button">Take a photo</label>
           <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
         </div>
-        <p class="hint">🔒 The text is read on your device. Your image never leaves this browser - only the words are checked.</p>
+        <p class="hint">The text is read on your device. Your image never leaves this browser - only the words are checked.</p>
         <div class="progress" id="ocr-progress" hidden><div></div></div>
         <img id="preview" class="preview" alt="Your image" hidden>
       </div>
 
       <div id="text-panel" role="tabpanel" aria-labelledby="tab-text">
-        <label for="message" class="label">Message</label>
-        <textarea id="message" maxlength="8000" placeholder="Paste the message here..." spellcheck="false"></textarea>
+        <label for="message" class="label">What did you receive?</label>
+        <textarea id="message" maxlength="8000" placeholder="Paste the text, email, or direct message you’re unsure about…" spellcheck="false"></textarea>
         <details class="more">
-          <summary>Sender details (optional - makes the check more accurate)</summary>
+          <summary>Add sender details <span class="optional">Optional</span></summary>
           <div class="grid">
             <div>
               <label for="channel">Where did it arrive?</label>
@@ -80,17 +82,25 @@
       </div>
 
       <div class="actions">
-        <button type="button" class="btn primary" id="analyze">Check message</button>
+        <button type="button" class="btn primary" id="analyze">Check message <span aria-hidden="true">→</span></button>
         <span class="status" id="status" role="status" aria-live="polite"></span>
       </div>
     </section>
 
-    <section aria-labelledby="examples-title">
-      <h2 id="examples-title">Try an example</h2>
-      <div class="chips" id="examples"></div>
+    <section class="card result-card" id="result" aria-label="Message analysis" tabindex="-1">
+      <div class="section-heading"><h2>Your results</h2><span class="step-label">02 / REVIEW</span></div>
+      <div class="empty-result" id="empty-result">
+        <svg viewBox="0 0 80 80" fill="none" aria-hidden="true"><rect x="17" y="10" width="46" height="59" rx="5"/><path d="M27 25h26M27 35h19M27 45h12"/><circle cx="54" cy="53" r="13"/><path d="m63 63 10 10m-24-20 4 4 7-8"/></svg>
+        <h3>A little clarity goes a long way.</h3>
+        <p>Add a message and we’ll show you what looks suspicious and what to do next.</p>
+        <div class="empty-caption">No links opened. No message history saved.</div>
+      </div>
     </section>
-
-    <section class="card" id="result" aria-live="polite" hidden></section>
+    </div>
+    <div class="utility-row">
+      <div class="example-picker"><label for="examples">Just looking? Try an example</label><select id="examples"><option value="">Choose a sample message…</option></select></div>
+      <span class="privacy-note" id="mode-pill">Your messages aren’t stored</span>
+    </div>
 
     <section class="card trusted" id="trusted-card" hidden>
       <h2>Your trusted senders</h2>
@@ -99,13 +109,13 @@
     </section>
 
     <section class="about" aria-labelledby="how-title">
-      <h2 id="how-title">How it works</h2>
-      <ul>
-        <li>20 transparent rules look for the tricks scammers use: requests for codes or passwords, gift-card and crypto payments, lookalike links (<code>chase-secure-verify.com</code>), impersonation, pressure and secrecy, hidden characters, and text aimed at fooling AI filters.</li>
-        <li>Every warning points at the exact words that triggered it, and the score explains itself.</li>
-        <li>Personal details (phone numbers, emails, card numbers, one-time codes) are masked before any AI model sees the text. Links are never opened.</li>
-        <li>This public demo stores nothing. It is a prototype tested on synthetic messages - a low score is not a guarantee. When in doubt, contact the company using a number you already have.</li>
-      </ul>
+      <div class="about-heading"><span class="eyebrow">Know what you’re looking at</span><h2 id="how-title">A clearer way to check.</h2></div>
+      <div class="about-grid">
+        <article><span class="guide-number">01</span><h3>Bring the message</h3><p>Paste the words or upload a screenshot. Add who sent it for a more useful check.</p></article>
+        <article><span class="guide-number">02</span><h3>See the warning signs</h3><p>We look for suspicious requests, misleading links, impersonation, and pressure to act.</p></article>
+        <article><span class="guide-number">03</span><h3>Take the next step</h3><p>Get practical guidance and see the exact words behind the result.</p></article>
+      </div>
+      <details class="limitations"><summary>About your privacy and these results</summary><p>Screenshots are read in your browser; only the extracted text is sent for analysis. Messages are not stored by this demo. If AI analysis is enabled, personal details are masked before the model sees the text. Trusted senders you choose to save stay in this browser.</p><p>This is a prototype tested on synthetic messages. A low score does not guarantee a message is safe. Verify uncertain requests through a contact method you already trust.</p></details>
     </section>
   </main>
 
